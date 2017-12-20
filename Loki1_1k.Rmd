@@ -1,0 +1,104 @@
+---
+title: "Loki1_1k"
+author: "Lokesh"
+date: "August 31, 2017"
+output: 
+  html_document:
+    toc: true
+    depth: 3  # upto three depths of headings (specified by #, ## and ###)
+    number_sections: true  ## if you want number sections at each table header
+    theme: united  # many options for theme, this one is my favorite.
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data and Coverage statistcs  of the assembly
+
+This file contains all the necessary commands that has been undertaken to do the differential coverage binning of the Baja samples that has been sequenced from samples that has been treated with lysozyme and untreated samples. 
+
+## loading necessary libraries
+
+
+```{r libraries, message = FALSE, warning=FALSE}
+library(vegan)
+library(plyr)
+library(RColorBrewer)
+library(alphahull)
+library(ggplot2)
+library(mmgenome)
+```
+
+# Extraction of Loki Bins: PART I
+
+Here we extract the scaffolds that fall in the region of our interest and we will define the exact location where we would like to get all the scaffolds from.
+
+## Scaffold extraction
+
+Here we extract the scaffolds using the 'mmgenome' R package and we look at the statistics of the particular scaffolds we extarct
+
+```{R scaf_extract,message = FALSE, warning=FALSE}
+setwd("~/Files/Loki_MGNM_Analysis/Baja_11_04_17/Re_Asm_1k/RASM_2_small_Loki/Loki1/")
+assembly <- readDNAStringSet("ReAsm_1k_Loki1.fa", format = "fasta")
+lys1 <- read.table("lys_RSAM_Loki1_BedTool.cov_avg.cov", header = T,sep = "\t")  
+ut1 <- read.table("ut_RSAM_Loki1_BedTool.cov_avg.cov", header = T,sep = "\t") 
+ess <- read.delim("ReAsm_1k_Loki1_arc.orfs.hmm.id.txt", header = F,sep="\t") 
+colnames(ess) = c("scaffold","orf","hmm.id")
+tax <- read.delim("Loki1_tax.txt", header = T,sep="\t") 
+net <- read.table("Loki1_ut_network.txt", header = T,sep="\t")
+m <- mmload(assembly = assembly, 
+            pca = T,
+            coverage = c("lys1", "ut1"), 
+            essential = ess,
+            tax = tax,
+            tax.expand = "Asgard group")
+
+
+
+p <- mmplot(data = m, x = "lys1", y = "ut1", log.x = T, log.y = T, color = "essential", minlength = 1000)
+#mmplot_locator(p)
+sel <- data.frame(lys1  =  10^(c(0.62, 0.704, 0.814, 0.945, 0.942, 0.893, 0.776, 0.689, 0.607)), ut1  = 10^(c(1.27, 1.31, 1.34, 1.34, 1.24, 1.19, 1.08, 1.09, 1.12)))
+
+mmplot_selection(p, sel) 
+dA <- mmextract(m, sel)
+mmstats(dA, ncov = 2)
+mmplot(data = dA, x = "lys1", y = "ut1", log.x = T,  log.y = T, color = "essential")
+```
+
+## kmer and other parameters inference on the extracted scaffolds
+
+Now, we look into separating the scaffolds based on the kmer frequencies in these scaffolds. 
+
+```{R kmer, message = FALSE, warning=FALSE}
+mmplot_pairs(data = dA,
+             variables = c("lys1","ut1", "PC1", "gc", "PC2"), 
+             log = c("lys1","ut1"),
+             color = "essential",
+             textsize = 5
+             )
+
+# PC1 and PC2 looks promising for subspace extraction
+p <- mmplot(data = dA, x = "PC1", y = "PC2", color = "essential")
+#sel <- mmplot_locator(p)
+sel <- data.frame(PC1  =  c(-0.0743, -0.137, -0.12, -0.104, -0.0492, 0.0762, 0.273, 0.369, 0.344, 0.319, 0.243, 0.11), PC2  =  c(0.679, 0.332, 0.0546, -0.184, -0.454, -0.739, -1.04, -0.885, -0.662, -0.223, 0.193, 0.563))
+mmplot_selection(p, sel)
+dB <- mmextract(dA, sel)
+mmstats(dB, ncov = 4)
+```
+
+## using network pairs to subselect scaffolds
+
+```{R network, message = FALSE, warning=FALSE}
+mmplot_network(data = dB, network = net, nconnections = 1, color = "essential")
+dC <- mmextract_network(subset = dB, original = m, network = net, nconnections = 20, type = "direct")
+mmplot_network(data = dC, network = net, nconnections = 1, color = "essential")
+p <- mmplot(data = dC, x = "lys1", y = "ut1", log.x = T, log.y = T, color = "essential", point.size = 5)
+sel <- data.frame(lys1  =  10^(c(0.648, 0.629, 0.629, 0.685, 0.734, 0.807, 0.866, 0.883, 0.854, 0.83, 0.799, 0.761, 0.683)),ut1  =  10^(c(1.15, 1.17, 1.23, 1.26, 1.27, 1.29, 1.3, 1.24, 1.2, 1.16, 1.13, 1.11, 1.11)))
+mmplot_selection(p, sel)
+mmplot_network(data = dC, network = net, nconnections = 1, color = "essential",highlight = dB)
+dD <- mmextract(data = dC, selection = sel,exclude = c("NODE_66_length_19919_cov_10.5607","NODE_197_length_7712_cov_11.2183","NODE_32_length_27769_cov_10.7821","NODE_187_length_8260_cov_9.95344","NODE_286_length_2783_cov_10.1364","NODE_74_length_18665_cov_12.9536","NODE_148_length_10743_cov_11.4925","NODE_129_length_12346_cov_19.6009","NODE_71_length_18931_cov_10.8043","NODE_111_length_13694_cov_10.765"))
+mmplot_network(data = dD, network = net, nconnections = 1, color = "essential")
+mmstats(dD, ncov = 4)
+```
