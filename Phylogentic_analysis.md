@@ -46,4 +46,7 @@ iqtree-omp -s G3PDH_all.mafft.gappy.faa -st AA -nt AUTO -quiet -safe -bb 1000 -a
 iqtree-omp -s G3PDH_all.mafft.automated.faa -st AA -nt AUTO -quiet -safe -bb 1000 -alrt 1000 -m TEST
 ```
 
-Then, we use [FigTree](http://tree.bio.ed.ac.uk/software/figtree/) for visualization of the tree!
+Then, we use [FigTree](http://tree.bio.ed.ac.uk/software/figtree/) for visualization of the tree! Then we can make a tree like the following using the FigTree program!
+
+Inline-style: 
+![alt text](https://github.com/lokeshbio/MetaGen/blob/master/GlpK_tree.nexus.jpg "Test-tree")
