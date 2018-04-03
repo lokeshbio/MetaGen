@@ -2,6 +2,12 @@
     -   [Obtaining reads](#obtaining-reads)
     -   [Quality check](#quality-check)
     -   [Quality trim, filter and check (again)](#quality-trim-filter-and-check-again)
+-   [Assembly](#assembly)
+    -   [SortMeRNA](#sortmerna)
+    -   [Assembly program](#assembly-program)
+    -   [Assembly quality](#assembly-quality)
+-   [Binning](#binning)
+    -   [Mapping](#mapping)
 
 Sequence processing
 -------------------
@@ -57,3 +63,95 @@ So, now we will use 'PrinSeq-Lite' to filter these sequences that have a lot of 
 ```
 
 As you can see, we need three different 'prinseq' statements to be able to process all the four different files from the trimmomatic. Once this filteration process is done, we can run 'fastqc' and 'multiqc' again to make sure that the filtered reads are of good quality!
+
+Assembly
+--------
+
+After this step the quality of the sequences looked pretty good!
+
+### SortMeRNA
+
+Just out of curiosity, we wanted to check quickly how the community of the microbes looked in the metagenomic dataset. So, we screened for rRNA signatures already in the read level on the metagenomic dataset as it is faster. So we ran this program called 'sortmerna'.
+
+``` bash
+    pigz -dc Sequences/Step2_filtered/*/$bin_name'.paired_1.fastq.gz' > temp_paired_r1
+    pigz -dc Sequences/Step2_filtered/*/$bin_name'.paired_2.fastq.gz' > temp_paired_r2
+    merge-paired-reads.sh temp_paired_r1 temp_paired_r2 temp_paired_int
+    sortmerna --ref /apps/sortmerna/2.1/rRNA_databases/silva-arc-16s-id95.fasta,/apps/sortmerna/2.1/index/silva-arc-16s-db:/apps/sortmerna/2.1/rRNA_databases/silva-arc-23s-id98.fasta,/apps/sortmerna/2.1/index/silva-arc-23s-db:/apps/sortmerna/2.1/rRNA_databases/silva-bac-16s-id90.fasta,/apps/sortmerna/2.1/index/silva-bac-16s-db:/apps/sortmerna/2.1/rRNA_databases/silva-bac-23s-id98.fasta,/apps/sortmerna/2.1/index/silva-bac-23s-db  --reads temp_paired_int --sam --num_alignments 1 --fastx --aligned SortmeRNA_files/$bin_name'SortMeRNA__sam_rRNA' -a 16 --log 
+    rm temp*
+```
+
+As the program will only take fastq files without 'gzipped' we ran the above command for all the metagenomic samples we had over a bash script. The reference database for the rRNA dataset indexed dor sortmerna was also found in the 'CUBE' server in the location mentioned above in the script.
+
+You get sam files by running this script and then you get the 'Reference ids' in the sam file and I made a list of the sortmeRNA reference ids and their respective taxonomic path in a file. Then we can actually calculate the taxonomy abundance by the following command.
+
+``` bash
+tail -n +3 Sec-20-NSSSortMeRNA__sam_rRNA.sam|cut -f 3|sort|uniq -c|perl -pe 's/;/\t/g' > Sec-20-NSS.sam.abund.txt
+multiple_replace.py Ref_sortmerna.tab Sec-20-NSS.sam.abund.txt Sec-20-NSS.sam.taxa.abund.txt
+perl -pe 's/ +/ /g' Sec-20-NSS.taxa.abund.txt|perl -pe 's/ //g' |perl -pe 's/ /\t/g'|perl -pe 's/;/\t/g' > Sec-20-NSS.sam.abund.txt1
+mv Sec-20-NSS.sam.abund.txt1 Sec-20-NSS.sam.abund.txt
+ktImportText *txt -o ../Piran_SortMeRNA.html
+```
+
+We can compare the the taxa abundances of the different samples in the 'Krona' plot in the 'html' file that is created in the last command.
+
+### Assembly program
+
+Now, we want to move on to doing the actual assembly! Here we will use the assembly program 'metaspades' and 'megahit' to start with. Spades especially is known to work well and perform better than the other assemblers in most of the recent publications in comparing the different assemblers!!
+
+To do the assembly, we take all the sequences that is available. So, for each sample (library) there should be 4 files. Two files that still has R1 and R2 paired end reads. Then two or four single end reads (only R1 or R2) that lost one of the pair due to lower qulaity from trimming and/or the filtering step.
+
+So, first we run the Spades assembly by using the metaspades option, since it is the version of spades that is to work better for Metganomic sequencing. Here we use all the read that is available!
+
+``` bash
+metaspades.py -k 21,33,55,77 -m 800 -o Piran_spades -t 32 --pe1-1 $dir'Sec-20-F1.paired_1.fastq.gz' --pe1-1 $dir'Sec-20-NSS.paired_1.fastq.gz' --pe1-2 $dir'Sec-20-F1.paired_2.fastq.gz' --pe1-2 $dir'Sec-20-NSS.paired_2.fastq.gz' --pe1-s $dir'Sec-20-F1.SE_1.fastq.gz' --pe1-s $dir'Sec-20-F1.SE_2.fastq.gz' --pe1-s $dir'Sec-20-NSS.SE_1.fastq.gz' --pe1-s $dir'Sec-20-NSS.SE_2.fastq.gz'
+```
+
+We also run 'megahit' assembly just so that it is better to combine different assemblies togther when you want to bin Genomes in the end!
+
+``` bash
+megahit --k-min 27 --k-max 77 --k-step 10 -m 100000000000 --mem-flag 2 -t 16 -o BF3_MegaH_out --out-prefix BF3_asm_MH -1 $dir'BF3-8L.paired_1.fastq.gz' -1 $dir'BF3-8N.paired_1.fastq.gz' -2 $dir'BF3-8L.paired_2.fastq.gz' -2 $dir'BF3-8N.paired_2.fastq.gz' -r $dir'BF3-8L.SE_1.fastq.gz' -r $dir'BF3-8L.SE_2.fastq.gz' -r $dir'BF3-8N.SE_1.fastq.gz' -r $dir'BF3-8N.SE_2.fastq.gz'
+```
+
+### Assembly quality
+
+We can check the assembly quality by running aprogram called 'quast' which gives all the statistics about the assembly that has been made. We can also compare many different assemblies togther, so that we can compare the analysis. This is run by the following code.
+
+``` bash
+quast.py -o Quast_Alex_Spades_a_MH -s -L -t 8 /proj/Lokesh/Piran_a_Alex_samples/H5GHCBGX5_merged/Assembly/Alex/*/scaffolds.fasta /scratch/Lokesh_scratch/Assembly_MH/Alex_MH/*/*fa
+```
+
+Then from these assemblies, I would only use the scaffolds that were more 1000bp for further analyses which is he binning and so on. To do this I first make sure that the fasta files are one-line fasta files and then I run my own code to extract the sequences that are &gt;= 1000bp long
+
+``` bash
+cd /proj/Lokesh/Piran_a_Alex_samples/H5GHCBGX5_merged/Assembly/Alex/H2-2_spades
+myown_oneLine.pl scaffolds.fasta
+sel_seq_length.pl 1000 scaffolds.fasta.oneline.fasta H2-9_spades_1k.fasta
+```
+
+Binning
+-------
+
+Now that we have the assemblies ready, it is time for binning genomes from metagenomes. So, in all the samples that we have in this dataset, we have done differential coverage treatment. This basically means that from each sample two different DNA extarctions were made and the assemblies were correspondingly by combining the reads per sample. You can check this at the assembly section.
+
+So, the idea here is that we map each of the two different Sequence library to the assembly and we should get different coverage for the different scaffolds that could help us in binning our genomes of interest. You can read more about in the "Nature Biotechnology paper by Mads Albertsson on Differential Coverage Binning".
+
+### Mapping
+
+So, lets map the reads first to the corresponding assembly! Below is an example of one such sample. here 'bbmap' which is amapping tool that is written and it is faster and we can calculate the average coverage of each scaffold from it very easily.
+
+``` bash
+mkdir MH_map
+mkdir Spades_map
+module load bbmap
+Alex_reads="/proj/Lokesh/Piran_a_Alex_samples/H5GHCBGX5_merged/Sequences/Step2_filtered/Alex_samples/"
+Piran_reads="/proj/Lokesh/Piran_a_Alex_samples/H5GHCBGX5_merged/Sequences/Step2_filtered/Piran_samples/"
+Alex_MH="/scratch/Lokesh_scratch/Assembly_MH/Alex_MH/"
+Alex_SP="/proj/Lokesh/Piran_a_Alex_samples/H5GHCBGX5_merged/Assembly/Alex/"
+
+bbmap.sh in1=$Alex_reads'H2-9K.paired_1.fastq.gz' in2=$Alex_reads'H2-9K.paired_2.fastq.gz' ref=$Alex_MH'H2-9_MegaH_out/H2-9_MH_1k.fasta' out=MH_map/H2-9K_MH.mapped.bam t=16 idfilter=90
+bbmap.sh in1=$Alex_reads'H2-9N.paired_1.fastq.gz' in2=$Alex_reads'H2-9N.paired_2.fastq.gz' out=MH_map/H2-9N_MH.mapped.bam t=16 idfilter=90
+
+bbmap.sh in1=$Alex_reads'H2-9K.paired_1.fastq.gz' in2=$Alex_reads'H2-9K.paired_2.fastq.gz' ref=$Alex_SP'H2-9_spades/H2-9_spades_1k.fasta' out=Spades_map/H2-9K_Spades.mapped.bam t=16 idfilter=90
+bbmap.sh in1=$Alex_reads'H2-9N.paired_1.fastq.gz' in2=$Alex_reads'H2-9N.paired_2.fastq.gz' out=Spades_map/H2-9N_spades.mapped.bam t=16 idfilter=90
+```
