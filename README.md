@@ -17,7 +17,7 @@ This file contains the information of how you use just the 'mmgenome' package to
 This file contains the simple code to do clustering and building a phylogentic tree based on the protein sequences you want to analyse.
 
 HAPPY HAPPY CODING :)
-
+```bash
 >fortune|cowsay
  ________________________________________
 / I fell asleep reading a dull book, and \
@@ -28,4 +28,5 @@ HAPPY HAPPY CODING :)
          \  (oo)\_______
             (__)\       )\/\
                 ||----w |
-                ||     ||
+                ||     ||
+```
