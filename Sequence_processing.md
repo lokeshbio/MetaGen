@@ -6,8 +6,15 @@
     -   [SortMeRNA](#sortmerna)
     -   [Assembly program](#assembly-program)
     -   [Assembly quality](#assembly-quality)
--   [Binning](#binning)
+-   [Files for Binning](#files-for-binning)
     -   [Mapping](#mapping)
+    -   [Coverage](#coverage)
+    -   [Essential genes and their taxonomy](#essential-genes-and-their-taxonomy)
+    -   [Quick check on the abundance of our favourite taxa groups](#quick-check-on-the-abundance-of-our-favourite-taxa-groups)
+-   [Binning](#binning)
+    -   [Coverage bi-plot](#coverage-bi-plot)
+    -   [Visualization of TACK only](#visualization-of-tack-only)
+-   [Shearing methods for library prep](#shearing-methods-for-library-prep)
 
 Sequence processing
 -------------------
@@ -129,8 +136,8 @@ myown_oneLine.pl scaffolds.fasta
 sel_seq_length.pl 1000 scaffolds.fasta.oneline.fasta H2-9_spades_1k.fasta
 ```
 
-Binning
--------
+Files for Binning
+-----------------
 
 Now that we have the assemblies ready, it is time for binning genomes from metagenomes. So, in all the samples that we have in this dataset, we have done differential coverage treatment. This basically means that from each sample two different DNA extarctions were made and the assemblies were correspondingly by combining the reads per sample. You can check this at the assembly section.
 
@@ -154,4 +161,182 @@ bbmap.sh in1=$Alex_reads'H2-9N.paired_1.fastq.gz' in2=$Alex_reads'H2-9N.paired_2
 
 bbmap.sh in1=$Alex_reads'H2-9K.paired_1.fastq.gz' in2=$Alex_reads'H2-9K.paired_2.fastq.gz' ref=$Alex_SP'H2-9_spades/H2-9_spades_1k.fasta' out=Spades_map/H2-9K_Spades.mapped.bam t=16 idfilter=90
 bbmap.sh in1=$Alex_reads'H2-9N.paired_1.fastq.gz' in2=$Alex_reads'H2-9N.paired_2.fastq.gz' out=Spades_map/H2-9N_spades.mapped.bam t=16 idfilter=90
+```
+
+### Coverage
+
+After the mapping of reads to the scaffolds, the next is to calculate the coverage of each of the scaffold! So, that we can map the coverage on the differential coverage plot. Then we use some of the scripts that came with the 'mmgenome' package to make all the necessary files to load it to the R along with the 'mmgenome' package.
+
+``` bash
+module load samtools
+module load bedtools
+#bbmap.sh in1=../../lys1.fq in2=../../lys2.fq ref=./Baja_scaf_1k.fa out=lys_scaf_1k.mapped.bam t=8 idfilter=90
+#bbmap.sh in1=../../ut1.fq in2=../../ut2.fq out=ut_scaf_1k.mapped.bam t=8 idfilter=90
+ls -1 *map|grep \:|tr -d ':'|while read line; do
+    cd $line
+    cd MH_map
+    ls -1 *bam|while read bam_file; do
+        samtools sort -@ 16 -T /tmp/$bam_file'sorted' -o $bam_file'.sorted.bam' $bam_file
+          genomeCoverageBed -ibam $bam_file'.sorted.bam' -g ../*MH*genome.txt > $bam_file'.cov'
+          bedTool_avg_mh.pl $bam_file'.cov'
+    done
+    cd ../Spades_map
+    ls -1 *bam|while read bam_file; do
+        samtools sort -@ 16 -T /tmp/$bam_file'sorted' -o $bam_file'.sorted.bam' $bam_file
+        genomeCoverageBed -ibam $bam_file'.sorted.bam' -g ../*spades*genome.txt > $bam_file'.cov'
+        bedTool_avg_sp.pl $bam_file'.cov'
+    done
+    cd ../../
+done
+```
+
+So, basially what we do here is to take each of the 'bam' mapped assemblies for each of the samples, each of the treatments and each of the assembly and sort them first using the samtools. Then we take the sorted bam file and use the script from bedtools (genomeCoverageBed) with '-g' option that gives the length of each scaffold in a separate file will give us the coverage of each base of the assembly. then I have an in house perl-script (bedTool\_avg\_sp.pl) to calculate the average coverage of each of the scaffold that can be used directly to the 'mmgenome' pipeline in R.
+
+### Essential genes and their taxonomy
+
+Now, following is the code to create other input files for the 'mmgenome' analysis, which are the list of essential genes from each of the scaffold and the corresponding taxonomy of the scaffold! The taxonomy of the scaffolds here are basically done by predicting the single copy genes from the scaffolds. Then 'blasting' them against NR database as the Asgard genomes are not part of the RefSeq database.
+
+Here I use the 'diamond' to blast them as it is faster as well and I do the MEGAn analysis manually instead of the commnd line! Because of the reason that there is a new file for mapping ncbi accession numbers to taxonomy and also it is more intuitive in the graphical user interface.
+
+``` bash
+ls -1 *map|grep \:|tr -d ':'|while read line; do
+    cd $line
+    ls -1 *fasta|while read ass; do
+        prodigal -a temp.orfs.faa -i $ass -m -o temp.txt -p meta -q
+        cut -f1 -d " " temp.orfs.faa > $ass'.orfs.faa'
+        hmmsearch --cpu 16 --tblout $ass'.hmm.orfs.txt' --cut_tc --notextw ~/Diff_Cov_Bin_tools/mmgenome_R_tool/scripts/essential.hmm $ass'.orfs.faa' > hmm.temp.txt
+        echo "scaffold orf hmm.id" > $ass'essential.txt'
+        tail -n+4  $ass'.hmm.orfs.txt' | sed 's/ * / /g' | cut -f1,4 -d " " | sed 's/_/ /' >> $ass'essential.txt'
+          grep -v "#" $ass'.hmm.orfs.txt' | cut -f1 -d " " > list.of.positive.orfs.txt
+          perl ~/Diff_Cov_Bin_tools/mmgenome_R_tool/scripts/extract.using.header.list.pl -l list.of.positive.orfs.txt -s $ass'.orfs.faa' -o $ass'.orfs.hmm.faa'
+
+#       blastp -query $ass.orfs.hmm.faa -db refseq_protein -evalue 1e-5 -num_threads 60 -max_target_seqs 5 -outfmt 5 -out $ass.orfs.hmm.blast.xml
+        diamond blastp --query $ass'.orfs.hmm.faa' --db /proj/Lokesh/Databases/nr_db/nr -f 5 -e 0.00001 -o $ass'.orfs.hmm.diamond.nr.xml' --threads 16
+#       MEGAN +g -x "load taxGIFile= ~/prot_acc2tax-Mar2018X1.abin; import blastfile= $ass'.orfs.hmm.diamond.nr.xml' meganfile=temp.rma;recompute toppercent=5;recompute minsupport=1;update;collapse rank=Species;update;select nodes=all;export what=CSV format=readname_taxonpath separator=tab file=$ass'.orfs.hmm.blast.tax.txt';update;close"
+          perl ~/Diff_Cov_Bin_tools/mmgenome_R_tool/scripts/hmm.majority.vote.pl -i $ass'.orfs.hmm.blast.tax.txt' -o $ass'.tax.txt'
+#   rm hmm.temp.txt
+#   rm list.of.positive.orfs.txt
+#   rm $ass'.orfs.hmm.blast.tax.txt'
+#   rm temp.orfs.faa
+#   rm temp.txt
+#   rm temp.rma
+# rm $ass.orfs.hmm.blast.xml
+#   rm $ass'.orfs.hmm.faa'
+#   rm $ass'.hmm.orfs.txt'
+    done
+    cd ..
+done
+```
+
+So basically, MEGAN does the LCA analyses of each of the Signal copy gene that went through the diamond blast program and based on the matches it got. then we export the annotations for each of the leaf from MEGAN into a tab separated txt file. The file that comes out of the megan program is not exactly compatible to run the 'hmm.majority.vote.pl' perl script, beacuse of the scaffold names that we use. This perl script likes to have the header format 'scffoldNAME\_ORFid'. The majority vote is definied based on the different 'ORFid's for the same 'scffoldNAME'. But the names of scaffolds from both spades and megahit, they themselves have the '\_'s in their name. So we format the file first na duse the perl script and reformat it for our taste by the following.
+
+``` bash
+ls -1 */*tax.txt|while read filename; do
+    bin_name=`basename $filename|cut -f 1 -d '.'`
+    perl -pi -e 's/\"//g' $filename
+    perl -pe 's/(.+)_(.+)\t/\1@\2\t/' $filename|perl -pe 's/_/-/g'|perl -pe 's/@/_/g' > $bin_name'_for_taxa.txt'
+    perl ~/Files/Loki_MGNM_Analysis/Diff_Binning_tools/mmgenome_R_tool/scripts/hmm.majority.vote.pl -i $bin_name'_for_taxa.txt' -o $bin_name'.tax.txt'
+    perl -pi -e 's/-/_/g' $bin_name'.tax.txt'
+done
+```
+
+Important Note: We should check if the format of the 'essential genes' text file is also fine with the '\_'s and spaces.
+
+### Quick check on the abundance of our favourite taxa groups
+
+Now we have coverage and taxonomy!! So we can get a quick peek on the relative abundance of our taxa based on the number of reads mapped to the scaffolds that got the taxonomic annotation of the interested groups.
+
+``` bash
+# first we only get the headers of the scaffolds that has taxa annotation
+tail -n+2 BF3-8_spades_1k.tax.txt|cut -f 1 > H2-2_spades_all_taxa.txt
+# Now, the intersting phyla
+grep 'TACK' H2-2_spades_1k_TACK.tax.txt|cut -f 1 > H2-2_spades_TACK.txt
+# Then further to class (thaumarchaeota)
+grep 'Thaum' H2-2_spades_1k_TACK.tax.txt|cut -f 1 > H2-2_spades_Thaum.txt
+
+# get the exact number of reads that mapped to the assembly using samtools
+samtools index H2-2K_Spades.mapped.bam.sorted.bam
+samtools idxstats H2-2K_Spades.mapped.bam.sorted.bam > H2-2K_Spades.mapped.bam.sorted.bam.idxstats
+
+# Now we use the "grep command perl script" to fish out 'idxstats' info for our interested scaffold 
+grep_f_long.pl H2-2_spades_all_taxa.txt ./H2-2K_Spades.mapped.bam.sorted.bam.idxstats H2-2_spades_all_taxa_coverage.txt
+
+#this should give us total number of reads
+cut -f 3-4 ./H2-2K_Spades.mapped.bam.sorted.bam.idxstats |perl -pe 's/\s/\+/'|perl -pe 's/\n/\+/'|perl -pe 's/\+$/\n/'|bc
+
+# Then number of reads for the particular cases
+cut -f 3-4 H2-2_spades_all_taxa_coverage.txt |perl -pe 's/\s/\+/'|perl -pe 's/\n/\+/'|perl -pe 's/\+$/\n/'|bc
+cut -f 3-4 H2-2_spades_TACK_coverage.txt |perl -pe 's/\s/\+/'|perl -pe 's/\n/\+/'|perl -pe 's/\+$/\n/'|bc
+cut -f 3-4 H2-2_spades_Thaum_coverage.txt |perl -pe 's/\s/\+/'|perl -pe 's/\n/\+/'|perl -pe 's/\+$/\n/'|bc
+```
+
+The ratio of 'TACK' to the 'all\_taxa' will give us the fraction of TACK among the annotations. Keep in mind that this doesn't necessarily reflect the actual relative abundance!! In best cases only about 5% of total reads mapped to scaffolds that had taxonomy annotations based on the Single Copy Genes. This is understable, as not all scaffolds will have SCGs and the primary reason we do this is to find the area in the Differential coverage bi-plot that has our favourite organisms.
+
+Binning
+-------
+
+Now it is time for the actual binning! the following code is based on the 'mmgenome' tutorial that is available online.
+
+Here we load the libararies
+
+``` r
+library(vegan)
+library(plyr)
+library(RColorBrewer)
+library(alphahull)
+library(ggplot2)
+library(mmgenome)
+```
+
+Here we extract the scaffolds that fall in the region of our interest and we will define the exact location where we would like to get all the scaffolds from.
+
+### Coverage bi-plot
+
+Here we extract the scaffolds using the 'mmgenome' R package and we look at the statistics of the particular scaffolds we extarct
+
+``` r
+setwd("~/Files/Alex_MetaGenomes_22_03_2018/Assembly/BF3/")
+assembly <- readDNAStringSet("BF3-8_spades_1k.fasta", format = "fasta")
+Lysozyme <- read.table("BF3-8L_Spades.mapped.bam.cov_avg.cov", header = T,sep = "\t")  
+NS_kit <- read.table("BF3-8N_spades.mapped.bam.cov_avg.cov", header = T,sep = "\t") 
+Enz_lys <- read.table("BF3-8L-Enz_Spades.mapped.bam.cov_avg.cov", header = T,sep = "\t") 
+Enz_NS <- read.table("BF3-8N-Enz_Spades.mapped.bam.cov_avg.cov", header = T,sep = "\t") 
+ess <- read.delim("BF3-8_spades_1k.fastaessential.txt", header = T,sep=" ") 
+#colnames(ess) = c("scaffold","orf","hmm.id")
+tax <- read.delim("BF3-8_spades_1k.tax.txt", header = T,sep="\t") 
+TACK_tax <- read.delim("BF3-8_spades_1k_TACK.tax.txt", header = T,sep="\t") 
+
+m <- mmload(assembly = assembly, 
+            pca = T,
+            coverage = c("Lysozyme", "NS_kit","Enz_lys","Enz_NS"), 
+            essential = ess,
+            tax = tax,
+            tax.expand = "TACK group")
+
+p <- mmplot(data = m, x = "Lysozyme", y = "NS_kit", log.x = T, log.y = T, color = "essential", minlength = 1000)
+p
+```
+
+### Visualization of TACK only
+
+``` r
+n <- mmload(assembly = assembly, 
+            pca = T,
+            coverage = c("Lysozyme", "NS_kit"), 
+            essential = ess,
+            tax = TACK_tax,
+            tax.expand = "TACK group")
+
+q <- mmplot(data = n, x = "Lysozyme", y = "NS_kit", log.x = T, log.y = T, color = "essential", minlength = 1000)
+q
+```
+
+Shearing methods for library prep
+---------------------------------
+
+Since we had two different kinds of library preparation, one with usual random shearing using covarice and the other with enzymatic shearing. We would like to look at how the shearing method influenced the taxonomy in these samples
+
+``` r
+mmplot(data = m, x = "Lysozyme", y = "Enz_lys", log.x = T, log.y = T, color = "essential", minlength = 1000)
+mmplot(data = m, x = "NS_kit", y = "Enz_NS", log.x = T, log.y = T, color = "essential", minlength = 1000)
 ```
